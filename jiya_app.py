@@ -1,111 +1,271 @@
-import os
+
 import streamlit as st
-from openai import OpenAI
+import streamlit.components.v1 as components
+from google import genai
+from google.genai import types
+import json
 
-st.set_page_config(page_title="JIYA AI", page_icon="🤖", layout="wide")
+# ---------------- APP SETTINGS ----------------
+st.set_page_config(
+    page_title="JIYA Personal AI",
+    page_icon="💜",
+    layout="centered"
+)
 
-# Configure OPENAI_API_KEY in Streamlit Secrets or environment variables.
-api_key = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-if not api_key:
-    st.warning("Add OPENAI_API_KEY in Streamlit → App settings → Secrets to enable JIYA's AI.")
-    st.code('OPENAI_API_KEY = "your_api_key_here"', language="toml")
+MODEL = "gemini-2.5-flash"
+
+SYSTEM_INSTRUCTION = """
+You are JIYA, a friendly personal AI assistant.
+
+Personality:
+- Speak like a warm, caring, intelligent female assistant.
+- Use natural Hindi and Hinglish when the user speaks Hindi.
+- Use simple English when the user speaks English.
+- Be polite, friendly, soft, and helpful.
+- Keep answers clear and easy to understand.
+- Help with daily tasks, learning, coding, and CDS preparation.
+- Never claim that you physically control a device unless an actual
+  connected integration confirms the action.
+"""
+
+# ---------------- SESSION MEMORY ----------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "voice_enabled" not in st.session_state:
+    st.session_state.voice_enabled = True
+
+# ---------------- HEADER ----------------
+st.title("💜 JIYA Personal AI")
+st.caption("Your friendly AI assistant")
+
+st.markdown(
+    """
+    **Hello Ashish! 😊**
+
+    Main JIYA hoon. Tum mujhse Hindi, Hinglish ya English mein
+    baat kar sakte ho.
+    """
+)
+
+# ---------------- SETTINGS ----------------
+with st.expander("⚙️ JIYA Settings"):
+    st.session_state.voice_enabled = st.toggle(
+        "Speak AI replies",
+        value=st.session_state.voice_enabled
+    )
+
+    st.caption(
+        "Soft female voice browser mein available voices se select hogi."
+    )
+
+    if st.button("🛑 Stop Speaking"):
+        components.html(
+            """
+            <script>
+            window.speechSynthesis.cancel();
+            </script>
+            """,
+            height=0
+        )
+
+    if st.button("🧹 Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
+
+# ---------------- API KEY ----------------
+try:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    API_KEY = ""
+
+if not API_KEY:
+    st.error("GEMINI_API_KEY missing hai.")
+
+    st.info(
+        """
+        Streamlit Cloud → App Settings → Secrets
+
+        Add:
+
+        GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
+        """
+    )
+
     st.stop()
 
-client = OpenAI(api_key=api_key)
+# ---------------- GEMINI CLIENT ----------------
+@st.cache_resource
+def get_client(api_key):
+    return genai.Client(api_key=api_key)
 
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "system", "content": (
-            "You are JIYA, a helpful personal AI assistant with a warm, friendly, "
-            "feminine-presenting voice/personality. Speak naturally. Use Hindi or Hinglish "
-            "when the user does, and English when they do. Be honest about your capabilities. "
-            "Never claim to control or connect devices unless an integration actually exists."
-        )}
-    ]
+client = get_client(API_KEY)
 
-st.markdown("""
-<style>
-.stApp { background: radial-gradient(ellipse at top, #1b1640 0%, #0b1020 45%, #080b14 100%); }
-[data-testid="stHeader"] { background: transparent; }
-.jiya-title { font-size: 3rem; font-weight: 800; letter-spacing: .04em; color: #f4eaff; }
-.jiya-sub { color: #c7c3e8; font-size: 1.05rem; }
-div[data-testid="stChatMessage"] { border: 1px solid rgba(183,155,255,.16); border-radius: 16px; }
-</style>
-""", unsafe_allow_html=True)
+# ---------------- VOICE OUTPUT ----------------
+def speak_text(text):
+    safe_text = json.dumps(text, ensure_ascii=False)
 
-with st.sidebar:
-    st.title("⚙️ JIYA Settings")
-    model = st.selectbox("AI model", ["gpt-4o-mini", "gpt-4.1-mini"], index=0)
-    voice = st.selectbox("Voice", ["shimmer", "nova", "alloy", "coral"], index=0)
-    speak = st.toggle("Speak replies", value=True)
-    st.caption("Voice availability and pronunciation depend on the selected speech model.")
-    st.divider()
-    if st.button("Clear conversation", use_container_width=True):
-        st.session_state.messages = [st.session_state.messages[0]]
-        st.rerun()
-    st.caption("Cross-device use: open this same deployed app URL on your other devices. "
-               "Conversation sync requires a database/login integration.")
+    components.html(
+        f"""
+        <script>
+        const textToSpeak = {safe_text};
 
-st.markdown('<div class="jiya-title">✨ JIYA AI</div>', unsafe_allow_html=True)
-st.markdown('<div class="jiya-sub">Your personal AI • Voice • Hindi / Hinglish / English</div>', unsafe_allow_html=True)
-st.divider()
+        function speakJiya() {{
+            if (!("speechSynthesis" in window)) {{
+                return;
+            }}
 
-for msg in st.session_state.messages[1:]:
-    with st.chat_message("assistant" if msg["role"] == "assistant" else "user"):
-        st.markdown(msg["content"])
+            window.speechSynthesis.cancel();
 
-# Voice input (supported by current Streamlit versions)
-audio = st.audio_input("🎙️ Speak to JIYA", key="voice_input")
-if audio is not None:
-    if st.session_state.get("last_audio_bytes") != audio.getvalue():
-        st.session_state.last_audio_bytes = audio.getvalue()
-        with st.spinner("JIYA is listening..."):
-            try:
-                transcript = client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=("voice_input.wav", audio.getvalue(), "audio/wav")
-                )
-                spoken_text = transcript.text.strip()
-                if spoken_text:
-                    st.session_state.pending_voice_text = spoken_text
-                    st.success(f"You said: {spoken_text}")
-            except Exception as e:
-                st.error(f"Voice transcription failed: {e}")
+            const utterance = new SpeechSynthesisUtterance(
+                textToSpeak
+            );
 
-prompt = st.chat_input("Message JIYA...")
-pending_voice = st.session_state.pop("pending_voice_text", None)
-user_text = prompt or pending_voice
+            utterance.lang = "en-IN";
+            utter.rate = 0.90;
+            utter.pitch = 1.10;
+            utter.volume = 1.0;
 
+            const voices = window.speechSynthesis.getVoices();
+
+            const femaleVoice = voices.find(v =>
+                /female|zira|samantha|aria|heera|priya|veena/i
+                .test(v.name)
+            );
+
+            const indianVoice = voices.find(v =>
+                /en-IN|hi-IN/i.test(v.lang)
+            );
+
+            if (femaleVoice) {{
+                utterance.voice = femaleVoice;
+            }} else if (indianVoice) {{
+                utterance.voice = indianVoice;
+            }}
+
+            window.speechSynthesis.speak(utterance);
+        }}
+
+        if (window.speechSynthesis.getVoices().length > 0) {{
+            speakJiya();
+        }} else {{
+            window.speechSynthesis.onvoiceschanged = speakJiya;
+        }}
+        </script>
+        """,
+        height=0
+    )
+
+# ---------------- CHAT DISPLAY ----------------
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# ---------------- USER TEXT INPUT ----------------
+prompt = st.chat_input("💬 JIYA se kuch bhi pucho...")
+
+# ---------------- MICROPHONE INPUT ----------------
+audio_input = st.audio_input("🎤 Ya mic se apna question record karo")
+
+user_text = None
+audio_bytes = None
+audio_mime = None
+
+if prompt:
+    user_text = prompt
+
+elif audio_input is not None:
+    audio_bytes = audio_input.getvalue()
+    audio_mime = audio_input.type or "audio/wav"
+    user_text = "Please understand my recorded audio and answer naturally."
+
+# ---------------- GENERATE RESPONSE ----------------
 if user_text:
-    st.session_state.messages.append({"role": "user", "content": user_text})
+
+    st.session_state.messages.append({
+        "role": "user",
+        "content": user_text if audio_bytes is None else "🎤 Audio question"
+    })
+
     with st.chat_message("user"):
-        st.markdown(user_text)
+        st.markdown(
+            user_text if audio_bytes is None else "🎤 Audio question received"
+        )
 
     with st.chat_message("assistant"):
-        with st.spinner("JIYA is thinking..."):
+
+        with st.spinner("💜 JIYA is thinking..."):
+
             try:
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=st.session_state.messages,
-                    temperature=0.7
-                )
-                answer = response.choices[0].message.content or "I couldn't create a response."
-                st.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer})
+                contents = []
 
-                if speak:
-                    try:
-                        audio_response = client.audio.speech.create(
-                            model="tts-1",
-                            voice=voice,
-                            input=answer
+                # Send conversation history
+                for msg in st.session_state.messages:
+
+                    if msg["role"] == "user":
+                        contents.append(
+                            types.Content(
+                                role="user",
+                                parts=[
+                                    types.Part(text=msg["content"])
+                                ]
+                            )
                         )
-                        audio_bytes = audio_response.read()
-                        st.audio(audio_bytes, format="audio/mpeg", autoplay=True)
-                    except Exception as e:
-                        st.info(f"Text reply is ready; speech could not be generated: {e}")
+
+                    elif msg["role"] == "assistant":
+                        contents.append(
+                            types.Content(
+                                role="model",
+                                parts=[
+                                    types.Part(text=msg["content"])
+                                ]
+                            )
+                        )
+
+                # Add recorded audio if user used microphone
+                if audio_bytes is not None:
+
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part(
+                                    text="Listen to this audio, understand the question, and answer in the same language."
+                                ),
+                                types.Part.from_bytes(
+                                    data=audio_bytes,
+                                    mime_type=audio_mime
+                                )
+                            ]
+                        )
+                    )
+
+                response = client.models.generate_content(
+                    model=MODEL,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_INSTRUCTION,
+                        temperature=0.7
+                    )
+                )
+
+                answer = response.text or "Sorry, main abhi jawab nahi de paayi."
+
+                st.markdown(answer)
+
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": answer
+                })
+
+                if st.session_state.voice_enabled:
+                    speak_text(answer)
+
             except Exception as e:
-                st.error(f"JIYA could not connect to the AI service: {e}")
 
-st.caption("Prototype: chat history is stored in this browser session only. Add authentication and a database for persistent cross-device memory.")
+                st.error(
+                    "Gemini se response nahi mila. "
+                    "API key, model name, internet ya quota check karo."
+                )
 
+                st.caption(str(e))
