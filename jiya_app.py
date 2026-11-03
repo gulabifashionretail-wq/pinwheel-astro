@@ -12,7 +12,7 @@ st.set_page_config(
     layout="centered"
 )
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.8-flash"
 
 SYSTEM_INSTRUCTION = """
 You are JIYA, a friendly personal AI assistant.
